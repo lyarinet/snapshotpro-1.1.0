@@ -1,0 +1,6 @@
+# Runtime only: no browser engine, build tools, or OCR Python/scientific stack.
+PyQt6>=6.8.1,<6.12
+mss>=10.2,<11
+Pillow>=10.4,<13
+# Windows uses RegisterHotKey directly. macOS/X11 use this optional OS bridge.
+pynput>=1.7.7,<2; sys_platform != 'win32'

@@ -1,0 +1,34 @@
+﻿# Environment & Secrets
+.env
+.env.local
+*.env
+
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+
+# Python virtual env & cache
+__pycache__/
+*.py[cod]
+*.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# PHP / Composer
+vendor/
+
+# OS & Editor temp files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build and test environments
+.venv-build/
+.pytest_cache/

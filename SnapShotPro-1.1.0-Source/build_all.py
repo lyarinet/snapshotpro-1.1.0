@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import time
 import zipfile
 from snapshot_core import VERSION
 
@@ -163,6 +164,15 @@ def main():
             subprocess.run(command, cwd=ROOT, check=True)
         elif (ROOT / 'SnapShot_Pro_Setup.spec').exists():
             print('Inno Setup 6 not found, building standalone PyInstaller GUI Setup wizard (SnapShot_Pro_Setup.exe)...')
+            setup_exe = ROOT / 'dist' / 'SnapShot_Pro_Setup.exe'
+            if setup_exe.exists():
+                try:
+                    subprocess.run(['taskkill', '/f', '/im', 'SnapShot_Pro_Setup.exe'],
+                                   capture_output=True, check=False)
+                    time.sleep(0.5)
+                    setup_exe.unlink(missing_ok=True)
+                except Exception:
+                    pass
             subprocess.run([sys.executable, '-m', 'PyInstaller', str(ROOT / 'SnapShot_Pro_Setup.spec'), '--noconfirm'], cwd=ROOT, check=True)
         else:
             print('Portable app is ready. To also build Setup.exe, install Inno Setup 6 or run PyInstaller on SnapShot_Pro_Setup.spec.')

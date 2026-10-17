@@ -8,7 +8,10 @@ if errorlevel 1 (
 ) else (
     py -3 -m venv .venv-build
 )
-if errorlevel 1 goto failed
+:: Kill lingering instances to avoid file lock / Access Denied error
+taskkill /f /im "SnapShot_Pro_Setup.exe" >nul 2>nul
+taskkill /f /im "SnapShotPro.exe" >nul 2>nul
+
 :build
 ".venv-build\Scripts\python.exe" -m pip install -r requirements-build.txt
 if errorlevel 1 goto failed

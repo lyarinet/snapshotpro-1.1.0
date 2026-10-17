@@ -34,12 +34,13 @@ class InstallWorker(QThread):
     progress = pyqtSignal(int, str)
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, target_dir: pathlib.Path, desktop_sc: bool, startmenu_sc: bool, launch_after: bool):
+    def __init__(self, target_dir: pathlib.Path, desktop_sc: bool, startmenu_sc: bool, launch_after: bool, autostart: bool = True):
         super().__init__()
         self.target_dir = target_dir
         self.desktop_sc = desktop_sc
         self.startmenu_sc = startmenu_sc
         self.launch_after = launch_after
+        self.autostart = autostart
 
     def run(self):
         try:
@@ -88,7 +89,23 @@ class InstallWorker(QThread):
                     lnk = start_dir / "SnapShot Pro.lnk"
                     self._create_shortcut(lnk, dest_exe, ico_file)
 
-            self.progress.emit(85, "Creating uninstaller...")
+            # Windows Startup (Auto start on PC restart)
+            if self.autostart:
+                self.progress.emit(80, "Configuring auto-start on Windows startup...")
+                appdata = os.environ.get("APPDATA")
+                if appdata:
+                    startup_dir = pathlib.Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+                    startup_dir.mkdir(parents=True, exist_ok=True)
+                    lnk = startup_dir / "SnapShot Pro.lnk"
+                    self._create_shortcut(lnk, dest_exe, ico_file)
+                try:
+                    import winreg
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE) as key:
+                        winreg.SetValueEx(key, "SnapShot Pro", 0, winreg.REG_SZ, f'"{dest_exe}"')
+                except Exception:
+                    pass
+
+            self.progress.emit(90, "Creating uninstaller...")
             self._create_uninstaller(dest_exe)
 
             self.progress.emit(100, "Installation complete!")
@@ -122,6 +139,8 @@ echo Uninstalling SnapShot Pro...
 taskkill /f /im SnapShotPro.exe >nul 2>&1
 timeout /t 1 >nul
 del /q "%USERPROFILE%\\Desktop\\SnapShot Pro.lnk" >nul 2>&1
+del /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SnapShot Pro.lnk" >nul 2>&1
+reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SnapShot Pro" /f >nul 2>&1
 rd /s /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\SnapShot Pro" >nul 2>&1
 echo Removing application directory...
 cd /d "%TEMP%"
@@ -136,7 +155,7 @@ class InstallerWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SnapShot Pro — Setup & Installation")
-        self.setFixedSize(520, 440)
+        self.setFixedSize(520, 475)
 
         # Set Window Icon
         base_dir = getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent)
@@ -244,6 +263,10 @@ class InstallerWindow(QWidget):
         self.chk_startmenu.setChecked(True)
         layout.addWidget(self.chk_startmenu)
 
+        self.chk_autostart = QCheckBox("Start SnapShot Pro automatically on Windows startup (PC restart)")
+        self.chk_autostart.setChecked(True)
+        layout.addWidget(self.chk_autostart)
+
         self.chk_launch = QCheckBox("Launch SnapShot Pro after setup")
         self.chk_launch.setChecked(True)
         layout.addWidget(self.chk_launch)
@@ -291,6 +314,7 @@ class InstallerWindow(QWidget):
             desktop_sc=self.chk_desktop.isChecked(),
             startmenu_sc=self.chk_startmenu.isChecked(),
             launch_after=self.chk_launch.isChecked(),
+            autostart=self.chk_autostart.isChecked(),
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished_signal.connect(self._on_finished)

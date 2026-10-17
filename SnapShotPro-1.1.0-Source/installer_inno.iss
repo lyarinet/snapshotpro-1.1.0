@@ -21,6 +21,7 @@ CloseApplications=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "autostart"; Description: "Start SnapShot Pro automatically on Windows startup (PC restart)"; GroupDescription: "{cm:AdditionalIcons}"
 [Files]
 #ifdef OneFile
 Source: "dist\SnapShotPro.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -30,5 +31,9 @@ Source: "dist\SnapShotPro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 [Icons]
 Name: "{group}\SnapShot Pro"; Filename: "{app}\SnapShotPro.exe"
 Name: "{autodesktop}\SnapShot Pro"; Filename: "{app}\SnapShotPro.exe"; Tasks: desktopicon
+Name: "{userstartup}\SnapShot Pro"; Filename: "{app}\SnapShotPro.exe"; Tasks: autostart
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SnapShot Pro"; ValueData: """{app}\SnapShotPro.exe"""; Flags: uninsdeletevalue; Tasks: autostart
 [Run]
 Filename: "{app}\SnapShotPro.exe"; Description: "{cm:LaunchProgram,SnapShot Pro}"; Flags: nowait postinstall skipifsilent
+

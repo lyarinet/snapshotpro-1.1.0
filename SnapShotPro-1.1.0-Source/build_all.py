@@ -161,8 +161,11 @@ def main():
                 command.append('/DOneFile')
             command.append(str(ROOT / 'installer_inno.iss'))
             subprocess.run(command, cwd=ROOT, check=True)
+        elif (ROOT / 'SnapShot_Pro_Setup.spec').exists():
+            print('Inno Setup 6 not found, building standalone PyInstaller GUI Setup wizard (SnapShot_Pro_Setup.exe)...')
+            subprocess.run([sys.executable, '-m', 'PyInstaller', str(ROOT / 'SnapShot_Pro_Setup.spec'), '--noconfirm'], cwd=ROOT, check=True)
         else:
-            print('Portable app is ready. To also build Setup.exe, install Inno Setup 6 and rerun this command.')
+            print('Portable app is ready. To also build Setup.exe, install Inno Setup 6 or run PyInstaller on SnapShot_Pro_Setup.spec.')
     artifacts = [p for p in dist.iterdir() if p.is_file() and p.suffix in {'.zip', '.exe'}]
     if is_file and target == 'Linux':
         artifacts.append(folder)

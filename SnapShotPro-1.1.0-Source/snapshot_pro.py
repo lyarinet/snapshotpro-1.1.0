@@ -504,6 +504,38 @@ class AppConfig:
     def ocr_language(self, value):
         self.settings.setValue("ocr_language", value.strip() or "eng")
 
+    @property
+    def autostart_enabled(self) -> bool:
+        if platform.system() != "Windows":
+            return False
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ) as key:
+                val, _ = winreg.QueryValueEx(key, "SnapShot Pro")
+                return bool(val)
+        except Exception:
+            return False
+
+    @autostart_enabled.setter
+    def autostart_enabled(self, enable: bool) -> None:
+        if platform.system() != "Windows":
+            return
+        try:
+            import winreg
+            run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            if enable:
+                exe_path = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(sys.argv[0])
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.SetValueEx(key, "SnapShot Pro", 0, winreg.REG_SZ, f'"{exe_path}"')
+            else:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE) as key:
+                        winreg.DeleteValue(key, "SnapShot Pro")
+                except FileNotFoundError:
+                    pass
+        except Exception:
+            pass
+
     def reset_defaults(self) -> None:
         self.settings.clear()
 
@@ -1853,6 +1885,10 @@ class SettingsDialog(QDialog):
         self.magnifier_chk.setChecked(self.config.show_magnifier)
         layout.addWidget(self.magnifier_chk)
 
+        self.autostart_chk = QCheckBox("Start SnapShot Pro automatically on Windows startup (PC restart)")
+        self.autostart_chk.setChecked(self.config.autostart_enabled)
+        layout.addWidget(self.autostart_chk)
+
         btn_row = QHBoxLayout()
         reset_btn = QPushButton("Reset Defaults")
         reset_btn.clicked.connect(self._reset_defaults)
@@ -1887,6 +1923,7 @@ class SettingsDialog(QDialog):
         self.auto_snap_chk.setChecked(False)
         self.auto_copy_chk.setChecked(False)
         self.magnifier_chk.setChecked(True)
+        self.autostart_chk.setChecked(True)
 
     def _save_settings(self) -> None:
         import re
@@ -1919,6 +1956,7 @@ class SettingsDialog(QDialog):
         self.config.auto_snap_windows = self.auto_snap_chk.isChecked()
         self.config.auto_copy_clipboard = self.auto_copy_chk.isChecked()
         self.config.show_magnifier = self.magnifier_chk.isChecked()
+        self.config.autostart_enabled = self.autostart_chk.isChecked()
 
         self.settings_saved.emit()
         self.accept()

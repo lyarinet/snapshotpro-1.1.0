@@ -425,6 +425,12 @@ class RecordingBorderOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         margin = 3
         self.setGeometry(target_rect.adjusted(-margin, -margin, margin, margin))
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x00000011)
+            except Exception:
+                pass
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -448,27 +454,47 @@ class ScreenRecorderController(QWidget):
         self._closed = False
         self.max_duration_seconds = 60
         self.elapsed_ms = 0
+        self._drag_pos = None
 
         self.setObjectName("RecBox")
         self.setStyleSheet("""
-            QWidget#RecBox { background: #0f172a; border: 2px solid #ef4444; border-radius: 10px; }
-            QLabel { color: #f8fafc; font-size: 12px; }
-            QPushButton { background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 6px 12px; font-weight: 600; font-size: 12px; }
+            QWidget#RecBox {
+                background: #0f172a;
+                border: 2px solid #ef4444;
+                border-radius: 12px;
+            }
+            QLabel { color: #f8fafc; font-size: 13px; }
+            QPushButton {
+                background: #1e293b;
+                color: #f8fafc;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 7px 14px;
+                font-weight: 600;
+                font-size: 12px;
+            }
             QPushButton:hover { background: #334155; }
-            QPushButton#StopBtn { background: #ef4444; border-color: #dc2626; color: #ffffff; }
+            QPushButton#StopBtn {
+                background: #ef4444;
+                border: 1px solid #dc2626;
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 13px;
+                padding: 7px 16px;
+            }
             QPushButton#StopBtn:hover { background: #dc2626; }
         """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(12)
 
         self.rec_lbl = QLabel("🔴 REC")
-        self.rec_lbl.setStyleSheet("color: #ef4444; font-weight: 800; font-size: 13px;")
+        self.rec_lbl.setStyleSheet("color: #ef4444; font-weight: 800; font-size: 14px;")
         layout.addWidget(self.rec_lbl)
 
         self.time_lbl = QLabel("00:00")
-        self.time_lbl.setStyleSheet("font-weight: 700; color: #38bdf8; font-size: 13px; font-family: monospace;")
+        self.time_lbl.setStyleSheet("font-weight: 700; color: #38bdf8; font-size: 14px; font-family: monospace;")
         layout.addWidget(self.time_lbl)
 
         self.frame_lbl = QLabel("0 frames")
@@ -477,28 +503,47 @@ class ScreenRecorderController(QWidget):
 
         layout.addSpacing(6)
 
-        self.stop_btn = QPushButton("⏹ Stop && Save GIF")
+        self.stop_btn = QPushButton("⏹ Stop & Save GIF")
         self.stop_btn.setObjectName("StopBtn")
+        self.stop_btn.setToolTip("Click or press Space / Enter to stop and save GIF")
         self.stop_btn.clicked.connect(self.finish_recording)
         layout.addWidget(self.stop_btn)
 
         cancel_btn = QPushButton("✕ Cancel")
+        cancel_btn.setToolTip("Cancel recording (Esc)")
         cancel_btn.clicked.connect(self.cancel_recording)
         layout.addWidget(cancel_btn)
 
         self.adjustSize()
 
-        # Position controller smartly near target_rect
+        # Position controller smartly outside or near target_rect
         screen = QGuiApplication.screenAt(target_rect.center()) or QGuiApplication.primaryScreen()
         avail = screen.availableGeometry()
-        x = max(avail.left(), min(target_rect.center().x() - self.width() // 2, avail.right() - self.width()))
-        if target_rect.bottom() + self.height() + 15 <= avail.bottom():
+        x = max(avail.left() + 10, min(target_rect.center().x() - self.width() // 2, avail.right() - self.width() - 10))
+        if target_rect.bottom() + self.height() + 20 <= avail.bottom():
             y = target_rect.bottom() + 10
-        elif target_rect.top() - self.height() - 15 >= avail.top():
+        elif target_rect.top() - self.height() - 20 >= avail.top():
             y = target_rect.top() - self.height() - 10
         else:
-            y = avail.top() + 10
+            y = avail.top() + 16
+            x = avail.right() - self.width() - 20
         self.move(x, y)
+
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x00000011)
+            except Exception:
+                pass
+
+        # Visual indicator border around recording area
+        self.border_overlay = RecordingBorderOverlay(target_rect)
+        self.border_overlay.show()
+
+        # Make floating controller visible and bring to front
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
         # Pulse animation for REC text
         self._pulse_state = True
@@ -512,16 +557,33 @@ class ScreenRecorderController(QWidget):
         self.timer.setInterval(100)
         self.timer.timeout.connect(self._record_tick)
 
-        # Visual indicator border around recording area
-        self.border_overlay = RecordingBorderOverlay(target_rect)
-        self.border_overlay.show()
-
         QTimer.singleShot(250, self.start_recording)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancel_recording()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.finish_recording()
+        else:
+            super().keyPressEvent(event)
 
     def _pulse_tick(self):
         self._pulse_state = not self._pulse_state
         color = "#ef4444" if self._pulse_state else "#64748b"
-        self.rec_lbl.setStyleSheet(f"color: {color}; font-weight: 800; font-size: 13px;")
+        self.rec_lbl.setStyleSheet(f"color: {color}; font-weight: 800; font-size: 14px;")
 
     def start_recording(self):
         if self._closed:
@@ -2428,7 +2490,7 @@ class SnapShotController(QMainWindow):
         self.tray_menu.addAction(self.act_tray_scroll)
 
         self.act_tray_gif = QAction("🎥 Record Screen to GIF", self)
-        self.act_tray_gif.triggered.connect(self.start_gif_capture)
+        self.act_tray_gif.triggered.connect(self._on_tray_gif_clicked)
         self.tray_menu.addAction(self.act_tray_gif)
 
         self.act_tray_ocr = QAction("📝 Extract OCR Text from Screen", self)
@@ -2678,16 +2740,25 @@ class SnapShotController(QMainWindow):
             self.active_scroll_ctrl = None
         self._restore_when_idle()
 
+    def _on_tray_gif_clicked(self):
+        if self.active_recorder_ctrl is not None:
+            self.active_recorder_ctrl.finish_recording()
+        else:
+            self.start_gif_capture()
+
     def _start_recorder_controller(self, target):
         controller = ScreenRecorderController(target)
         self.active_recorder_ctrl = controller
         controller.finished.connect(self._handle_recording_finished)
         controller.cancelled.connect(lambda: self.show_notification("Screen Recorder", "Recording cancelled."))
         controller.destroyed.connect(lambda: self._recorder_closed(controller))
+        self.act_tray_gif.setText("⏹ Stop GIF Recording")
+        self.show_notification("Recording Started", "Recording in progress… Click '⏹ Stop & Save GIF' or press Space.")
 
     def _recorder_closed(self, controller):
         if self.active_recorder_ctrl is controller:
             self.active_recorder_ctrl = None
+            self.act_tray_gif.setText("🎥 Record Screen to GIF")
         self._restore_when_idle()
 
     def _handle_recording_finished(self, frames):

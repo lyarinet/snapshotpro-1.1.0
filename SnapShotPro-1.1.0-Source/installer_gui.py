@@ -51,16 +51,24 @@ class InstallWorker(QThread):
             base_dir = getattr(sys, "_MEIPASS", pathlib.Path(__file__).resolve().parent)
             base_path = pathlib.Path(base_dir)
 
+            source_dir = base_path / "SnapShotPro"
+            if not source_dir.exists():
+                source_dir = base_path / "dist" / "SnapShotPro"
+
             source_exe = base_path / "SnapShotPro.exe"
             if not source_exe.exists():
                 source_exe = base_path / "dist" / "SnapShotPro.exe"
 
-            if not source_exe.exists():
-                raise FileNotFoundError(f"SnapShotPro.exe payload not found in {base_path}")
-
-            self.progress.emit(30, "Copying application binaries...")
-            dest_exe = self.target_dir / "SnapShotPro.exe"
-            shutil.copy2(source_exe, dest_exe)
+            if source_dir.exists() and source_dir.is_dir():
+                self.progress.emit(30, "Copying application binaries and dependencies...")
+                shutil.copytree(source_dir, self.target_dir, dirs_exist_ok=True)
+                dest_exe = self.target_dir / "SnapShotPro.exe"
+            elif source_exe.exists() and source_exe.is_file():
+                self.progress.emit(30, "Copying application binaries...")
+                dest_exe = self.target_dir / "SnapShotPro.exe"
+                shutil.copy2(source_exe, dest_exe)
+            else:
+                raise FileNotFoundError(f"SnapShotPro payload not found in {base_path}")
 
             self.progress.emit(50, "Installing application icons and assets...")
             dest_assets = self.target_dir / "assets"
@@ -71,6 +79,8 @@ class InstallWorker(QThread):
                     shutil.copy2(item, dest_assets / item.name)
 
             ico_file = dest_assets / "icon.ico"
+            if not ico_file.exists():
+                ico_file = dest_exe
 
             self.progress.emit(70, "Creating Windows shortcuts...")
             # Desktop Shortcut

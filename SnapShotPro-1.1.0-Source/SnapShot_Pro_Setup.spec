@@ -1,11 +1,20 @@
-# -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 
+ROOT = Path.cwd()
+payload_datas = [('assets', 'assets')]
+onedir_path = ROOT / 'dist' / 'SnapShotPro'
+onefile_path = ROOT / 'dist' / 'SnapShotPro.exe'
+
+if onedir_path.is_dir() and (onedir_path / 'SnapShotPro.exe').exists():
+    payload_datas.append(('dist/SnapShotPro', 'SnapShotPro'))
+elif onefile_path.is_file():
+    payload_datas.append(('dist/SnapShotPro.exe', '.'))
 
 a = Analysis(
     ['installer_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('dist/SnapShotPro.exe', '.'), ('assets', 'assets')],
+    datas=payload_datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

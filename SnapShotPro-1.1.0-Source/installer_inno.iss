@@ -6,6 +6,7 @@ AppId={{9F572D8A-5F1A-4FBE-B3A9-4E65245BD3C1}
 AppName=SnapShot Pro
 AppVersion={#AppVersion}
 AppPublisher=Lyaritech
+AppCopyright=Copyright (C) 2026 SnapShot Pro • Lyaritech
 DefaultDirName={localappdata}\Programs\SnapShot Pro
 DefaultGroupName=SnapShot Pro
 PrivilegesRequired=lowest
@@ -30,6 +31,7 @@ Source: "dist\SnapShotPro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 #endif
 [Icons]
 Name: "{group}\SnapShot Pro"; Filename: "{app}\SnapShotPro.exe"
+Name: "{group}\Uninstall SnapShot Pro"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\SnapShot Pro"; Filename: "{app}\SnapShotPro.exe"; Tasks: desktopicon
 Name: "{userstartup}\SnapShot Pro"; Filename: "{app}\SnapShotPro.exe"; Tasks: autostart
 [Registry]

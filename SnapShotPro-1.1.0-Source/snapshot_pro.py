@@ -99,6 +99,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from snapshot_core import (
     VERSION, MAX_IMAGE_PIXELS, ImageJob, crop_pixmap, physical_rect,
     image_to_pil, pil_to_image, stitch_images, save_image, extract_text,
+    save_gif,
 )
 from snapshot_native import GlobalHotkeyManager, scroll_down
 
@@ -410,6 +411,173 @@ class ScrollingCaptureController(QWidget):
             self._closed = True
             self.cancelled.emit()
         event.accept()
+
+
+class RecordingBorderOverlay(QWidget):
+    """Visual dashed red border highlighting the exact screen area being recorded."""
+
+    def __init__(self, target_rect: QRect):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint |
+                               Qt.WindowType.WindowStaysOnTopHint |
+                               Qt.WindowType.Tool |
+                               Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        margin = 3
+        self.setGeometry(target_rect.adjusted(-margin, -margin, margin, margin))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        pen = QPen(QColor("#EF4444"), 2, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawRect(1, 1, self.width() - 2, self.height() - 2)
+
+
+class ScreenRecorderController(QWidget):
+    """Floating controller for recording a screen region into an animated GIF."""
+    finished = pyqtSignal(list)
+    cancelled = pyqtSignal()
+
+    def __init__(self, target_rect: QRect, parent=None):
+        super().__init__(parent, Qt.WindowType.FramelessWindowHint |
+                         Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.target_rect = target_rect
+        self.captured_frames: List[QPixmap] = []
+        self._recording = False
+        self._closed = False
+        self.max_duration_seconds = 60
+        self.elapsed_ms = 0
+
+        self.setObjectName("RecBox")
+        self.setStyleSheet("""
+            QWidget#RecBox { background: #0f172a; border: 2px solid #ef4444; border-radius: 10px; }
+            QLabel { color: #f8fafc; font-size: 12px; }
+            QPushButton { background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 6px 12px; font-weight: 600; font-size: 12px; }
+            QPushButton:hover { background: #334155; }
+            QPushButton#StopBtn { background: #ef4444; border-color: #dc2626; color: #ffffff; }
+            QPushButton#StopBtn:hover { background: #dc2626; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
+
+        self.rec_lbl = QLabel("🔴 REC")
+        self.rec_lbl.setStyleSheet("color: #ef4444; font-weight: 800; font-size: 13px;")
+        layout.addWidget(self.rec_lbl)
+
+        self.time_lbl = QLabel("00:00")
+        self.time_lbl.setStyleSheet("font-weight: 700; color: #38bdf8; font-size: 13px; font-family: monospace;")
+        layout.addWidget(self.time_lbl)
+
+        self.frame_lbl = QLabel("0 frames")
+        self.frame_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout.addWidget(self.frame_lbl)
+
+        layout.addSpacing(6)
+
+        self.stop_btn = QPushButton("⏹ Stop && Save GIF")
+        self.stop_btn.setObjectName("StopBtn")
+        self.stop_btn.clicked.connect(self.finish_recording)
+        layout.addWidget(self.stop_btn)
+
+        cancel_btn = QPushButton("✕ Cancel")
+        cancel_btn.clicked.connect(self.cancel_recording)
+        layout.addWidget(cancel_btn)
+
+        self.adjustSize()
+
+        # Position controller smartly near target_rect
+        screen = QGuiApplication.screenAt(target_rect.center()) or QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry()
+        x = max(avail.left(), min(target_rect.center().x() - self.width() // 2, avail.right() - self.width()))
+        if target_rect.bottom() + self.height() + 15 <= avail.bottom():
+            y = target_rect.bottom() + 10
+        elif target_rect.top() - self.height() - 15 >= avail.top():
+            y = target_rect.top() - self.height() - 10
+        else:
+            y = avail.top() + 10
+        self.move(x, y)
+
+        # Pulse animation for REC text
+        self._pulse_state = True
+        self.pulse_timer = QTimer(self)
+        self.pulse_timer.setInterval(600)
+        self.pulse_timer.timeout.connect(self._pulse_tick)
+        self.pulse_timer.start()
+
+        # Recording timer (100ms = 10 FPS)
+        self.timer = QTimer(self)
+        self.timer.setInterval(100)
+        self.timer.timeout.connect(self._record_tick)
+
+        # Visual indicator border around recording area
+        self.border_overlay = RecordingBorderOverlay(target_rect)
+        self.border_overlay.show()
+
+        QTimer.singleShot(250, self.start_recording)
+
+    def _pulse_tick(self):
+        self._pulse_state = not self._pulse_state
+        color = "#ef4444" if self._pulse_state else "#64748b"
+        self.rec_lbl.setStyleSheet(f"color: {color}; font-weight: 800; font-size: 13px;")
+
+    def start_recording(self):
+        if self._closed:
+            return
+        self._recording = True
+        self.timer.start()
+
+    def _record_tick(self):
+        if self._closed or not self._recording:
+            return
+        self.elapsed_ms += self.timer.interval()
+        total_seconds = self.elapsed_ms // 1000
+        mins = total_seconds // 60
+        secs = total_seconds % 60
+        self.time_lbl.setText(f"{mins:02d}:{secs:02d}")
+
+        try:
+            pix = ScreenGrabber.grab_region(self.target_rect)
+            if not pix.isNull():
+                self.captured_frames.append(pix)
+                self.frame_lbl.setText(f"{len(self.captured_frames)} frames")
+        except Exception:
+            pass
+
+        if total_seconds >= self.max_duration_seconds:
+            self.finish_recording()
+
+    def finish_recording(self):
+        if self._closed or not self.captured_frames:
+            self.cancel_recording()
+            return
+        self._closed = True
+        self.timer.stop()
+        self.pulse_timer.stop()
+        if hasattr(self, 'border_overlay') and self.border_overlay:
+            self.border_overlay.close()
+        self.finished.emit(self.captured_frames)
+        self.close()
+
+    def cancel_recording(self):
+        self._closed = True
+        self.timer.stop()
+        self.pulse_timer.stop()
+        if hasattr(self, 'border_overlay') and self.border_overlay:
+            self.border_overlay.close()
+        self.cancelled.emit()
+        self.close()
+
+    def closeEvent(self, event):
+        self._closed = True
+        self.timer.stop()
+        self.pulse_timer.stop()
+        if hasattr(self, 'border_overlay') and self.border_overlay:
+            self.border_overlay.close()
+        event.accept()
+
 
 
 # ============================================================================
@@ -762,6 +930,7 @@ class CaptureOverlay(QWidget):
     multicapture_finished = pyqtSignal(list)
     scroll_capture_requested = pyqtSignal(QRect)
     ocr_requested = pyqtSignal(QImage)
+    gif_record_requested = pyqtSignal(QRect)
 
     HANDLE_SIZE = 8
 
@@ -787,6 +956,7 @@ class CaptureOverlay(QWidget):
         self.working_pixmap = desktop_pixmap  # implicit sharing; no second desktop allocation
         self._sample_image = desktop_pixmap.toImage()
         self.scroll_mode = False
+        self.gif_mode = False
         self.editor_mode = False
         self.virtual_rect = virtual_rect
         self.config = config
@@ -944,6 +1114,13 @@ class CaptureOverlay(QWidget):
         btn_scroll.clicked.connect(self.action_start_scroll_capture)
         act_layout.addWidget(btn_scroll, 0, 2)
 
+        # [FEATURE 5] GIF Recorder Button
+        btn_gif = QPushButton("🎥 GIF")
+        btn_gif.setToolTip("Record selected region as animated GIF")
+        btn_gif.setStyleSheet("background-color: #DC2626; color: white; font-weight: bold;")
+        btn_gif.clicked.connect(self.action_start_gif_recording)
+        act_layout.addWidget(btn_gif, 0, 3)
+
         undo_btn = QPushButton("Undo")
         undo_btn.setToolTip("Undo Last Annotation (Ctrl+Z)")
         undo_btn.clicked.connect(self.undo_annotation)
@@ -963,17 +1140,17 @@ class CaptureOverlay(QWidget):
         quick_save_btn = QPushButton("Save")
         quick_save_btn.setToolTip("Instant Save (Ctrl+D)")
         quick_save_btn.clicked.connect(self.action_quick_save)
-        act_layout.addWidget(quick_save_btn, 2, 0)
+        act_layout.addWidget(quick_save_btn, 1, 3)
 
         copy_btn = QPushButton("Copy (Enter)")
         copy_btn.setStyleSheet("background-color: #4F46E5; color: white;")
         copy_btn.clicked.connect(self.action_copy_clipboard)
-        act_layout.addWidget(copy_btn, 2, 1)
+        act_layout.addWidget(copy_btn, 2, 0, 1, 2)
 
         self.finish_btn = QPushButton("Finish (Esc)")
-        self.finish_btn.setStyleSheet("background-color: #DC2626; color: white;")
+        self.finish_btn.setStyleSheet("background-color: #334155; color: white;")
         self.finish_btn.clicked.connect(self.finish_and_close)
-        act_layout.addWidget(self.finish_btn, 2, 2)
+        act_layout.addWidget(self.finish_btn, 2, 2, 1, 2)
 
         self.actions_bar.adjustSize()
         self.actions_bar.hide()
@@ -1527,6 +1704,9 @@ class CaptureOverlay(QWidget):
                 if self.scroll_mode:
                     self.action_start_scroll_capture()
                     return
+                if getattr(self, "gif_mode", False):
+                    self.action_start_gif_recording()
+                    return
 
                 self._position_toolbars()
                 if self.config.auto_copy_clipboard and not self.multi_mode:
@@ -1541,6 +1721,9 @@ class CaptureOverlay(QWidget):
                     return
                 if self.scroll_mode:
                     self.action_start_scroll_capture()
+                    return
+                if getattr(self, "gif_mode", False):
+                    self.action_start_gif_recording()
                     return
                 self._position_toolbars()
                 if self.config.auto_copy_clipboard and not self.multi_mode:
@@ -1669,6 +1852,15 @@ class CaptureOverlay(QWidget):
             return
         self.scroll_capture_requested.emit(sel.translated(self.virtual_rect.topLeft()))
         self.close()
+
+    def action_start_gif_recording(self):
+        sel = self.selection_rect.normalized()
+        if self.editor_mode or sel.width() < 20 or sel.height() < 20:
+            self.notification_requested.emit("Screen Recorder", "Select a screen region at least 20 × 20 pixels.")
+            return
+        self.gif_record_requested.emit(sel.translated(self.virtual_rect.topLeft()))
+        self.close()
+
 
     def _prepare_next_multi_snip(self, crop: QPixmap) -> None:
         if sum(p.width() * p.height() for p in self.captured_crops) + crop.width() * crop.height() > MAX_IMAGE_PIXELS:
@@ -1906,6 +2098,11 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_row)
 
+        copyright_lbl = QLabel("© 2026 SnapShot Pro • Lyaritech. All rights reserved.")
+        copyright_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        copyright_lbl.setStyleSheet("font-size: 11px; color: #475569; padding-top: 4px;")
+        layout.addWidget(copyright_lbl)
+
     def _browse_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select Quick Save Folder", self.dir_edit.text())
         if folder:
@@ -1981,12 +2178,13 @@ class SnapShotController(QMainWindow):
         self.app_icon = get_app_icon()
         self.active_overlay: Optional[CaptureOverlay] = None
         self.active_scroll_ctrl: Optional[ScrollingCaptureController] = None
+        self.active_recorder_ctrl: Optional[ScreenRecorderController] = None
         self.pinned_windows: List[PinnedScreenshotWindow] = []
 
         self.setWindowTitle("SnapShot Pro — Advanced Screenshot Suite")
         self.setWindowIcon(self.app_icon)
-        self.resize(620, 650)
-        self.setMinimumSize(560, 610)
+        self.resize(620, 680)
+        self.setMinimumSize(560, 630)
 
         self._build_ui()
         self._setup_system_tray()
@@ -2021,7 +2219,7 @@ class SnapShotController(QMainWindow):
         central.setObjectName("Panel")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(28, 24, 28, 22)
+        layout.setContentsMargins(28, 24, 28, 16)
         layout.setSpacing(14)
         brand = QHBoxLayout()
         title = QLabel("SNAPSHOT  <span style='color:#42dfc5'>PRO</span>")
@@ -2048,6 +2246,7 @@ class SnapShotController(QMainWindow):
         grid.setSpacing(10)
         actions = [
             ("↕   Scrolling capture", "Manual frames or automatic scroll with overlap detection", self.start_scrolling_capture),
+            ("🎥   Record to GIF", "Select a screen area and record animated GIF", self.start_gif_capture),
             ("T   Text grabber", "Extract text locally with Tesseract OCR", self.start_ocr_capture),
             ("▦   Multi-snip", "Collect several regions and combine them vertically", self.start_multi_capture),
             ("▣   Full desktop", "Copy and save all screens in one image", self.capture_fullscreen_instant),
@@ -2102,6 +2301,11 @@ class SnapShotController(QMainWindow):
         footer.addWidget(self.tray_button)
         layout.addLayout(footer)
         layout.addStretch()
+
+        copyright_lbl = QLabel("© 2026 SnapShot Pro • Lyaritech. All rights reserved.")
+        copyright_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        copyright_lbl.setStyleSheet("font-size: 11px; color: #4e637a; padding-top: 6px;")
+        layout.addWidget(copyright_lbl)
 
     def _start_selected_delay(self):
         self.start_delayed_capture(self.delay_combo.currentData())
@@ -2222,6 +2426,10 @@ class SnapShotController(QMainWindow):
         self.act_tray_scroll = QAction("📜 Scrolling Long Capture", self)
         self.act_tray_scroll.triggered.connect(self.start_scrolling_capture)
         self.tray_menu.addAction(self.act_tray_scroll)
+
+        self.act_tray_gif = QAction("🎥 Record Screen to GIF", self)
+        self.act_tray_gif.triggered.connect(self.start_gif_capture)
+        self.tray_menu.addAction(self.act_tray_gif)
 
         self.act_tray_ocr = QAction("📝 Extract OCR Text from Screen", self)
         self.act_tray_ocr.triggered.connect(self.start_ocr_capture)
@@ -2374,16 +2582,21 @@ class SnapShotController(QMainWindow):
     def start_scrolling_capture(self):
         self._launch_overlay(scroll_mode=True)
 
-    def _launch_overlay(self, multi_mode=False, ocr_mode=False, scroll_mode=False):
-        if self._quitting or self._capture_pending or self.active_overlay is not None or self.active_scroll_ctrl is not None:
+    def start_gif_capture(self):
+        self.show_notification("Screen Recorder", "Drag any screen area to record an animated GIF.")
+        self._launch_overlay(gif_mode=True)
+
+    def _launch_overlay(self, multi_mode=False, ocr_mode=False, scroll_mode=False, gif_mode=False):
+        if (self._quitting or self._capture_pending or self.active_overlay is not None or
+                self.active_scroll_ctrl is not None or self.active_recorder_ctrl is not None):
             return
         self._capture_pending = True
         self._restore_after_work = self._restore_after_work or self.isVisible()
         self.hide()
         # Wait for the compositor to remove our window before grabbing the desktop.
-        QTimer.singleShot(180, lambda: self._do_launch_overlay(multi_mode, ocr_mode, scroll_mode))
+        QTimer.singleShot(180, lambda: self._do_launch_overlay(multi_mode, ocr_mode, scroll_mode, gif_mode))
 
-    def _do_launch_overlay(self, multi_mode=False, ocr_mode=False, scroll_mode=False):
+    def _do_launch_overlay(self, multi_mode=False, ocr_mode=False, scroll_mode=False, gif_mode=False):
         if self._quitting:
             return
         self._capture_pending = False
@@ -2394,6 +2607,7 @@ class SnapShotController(QMainWindow):
             return
         overlay = CaptureOverlay(pixmap, virtual, self.config, multi_mode, ocr_mode)
         overlay.scroll_mode = scroll_mode
+        overlay.gif_mode = gif_mode
         self._attach_overlay(overlay)
 
     def _attach_overlay(self, overlay):
@@ -2403,6 +2617,7 @@ class SnapShotController(QMainWindow):
         overlay.notification_requested.connect(self.show_notification)
         overlay.multicapture_finished.connect(self._handle_multicapture_finished)
         overlay.scroll_capture_requested.connect(self._start_scroll_controller)
+        overlay.gif_record_requested.connect(self._start_recorder_controller)
         overlay.ocr_requested.connect(self._run_ocr)
         overlay.show()
         overlay.activateWindow()
@@ -2415,7 +2630,8 @@ class SnapShotController(QMainWindow):
 
     def _restore_when_idle(self):
         if (not self._quitting and self._restore_after_work and not self._capture_pending and
-                self.active_overlay is None and self.active_scroll_ctrl is None and not self._jobs):
+                self.active_overlay is None and self.active_scroll_ctrl is None and
+                self.active_recorder_ctrl is None and not self._jobs):
             self._restore_after_work = False
             self.show_normal_window()
 
@@ -2462,6 +2678,31 @@ class SnapShotController(QMainWindow):
             self.active_scroll_ctrl = None
         self._restore_when_idle()
 
+    def _start_recorder_controller(self, target):
+        controller = ScreenRecorderController(target)
+        self.active_recorder_ctrl = controller
+        controller.finished.connect(self._handle_recording_finished)
+        controller.cancelled.connect(lambda: self.show_notification("Screen Recorder", "Recording cancelled."))
+        controller.destroyed.connect(lambda: self._recorder_closed(controller))
+
+    def _recorder_closed(self, controller):
+        if self.active_recorder_ctrl is controller:
+            self.active_recorder_ctrl = None
+        self._restore_when_idle()
+
+    def _handle_recording_finished(self, frames):
+        if frames:
+            self.show_notification("Screen Recorder", f"Encoding {len(frames)} frames into animated GIF…")
+            self._submit_job(save_gif, (frames, self.config.save_directory, "SnapShot_Rec", 10),
+                             self._on_gif_saved)
+
+    def _on_gif_saved(self, filepath):
+        self.show_notification("GIF Saved", f"Animation saved to {filepath.name}")
+        try:
+            QApplication.clipboard().setText(str(filepath))
+        except Exception:
+            pass
+
     def _handle_scroll_finished(self, frames):
         if frames:
             self.show_notification("Scrolling capture", "Aligning frames in the background…")
@@ -2487,7 +2728,8 @@ class SnapShotController(QMainWindow):
         self.show_notification("Capture complete", f"{image.width()} × {image.height()} px • {path.name}")
 
     def _start_instant(self, split=False):
-        if self._capture_pending or self.active_overlay is not None or self.active_scroll_ctrl is not None:
+        if (self._capture_pending or self.active_overlay is not None or
+                self.active_scroll_ctrl is not None or self.active_recorder_ctrl is not None):
             return
         self._capture_pending = True
         self._restore_after_work = self._restore_after_work or self.isVisible()
@@ -2517,7 +2759,8 @@ class SnapShotController(QMainWindow):
         self._start_instant()
 
     def start_delayed_capture(self, delay_ms=3000):
-        if self._capture_pending or self.active_overlay is not None or self.active_scroll_ctrl is not None:
+        if (self._capture_pending or self.active_overlay is not None or
+                self.active_scroll_ctrl is not None or self.active_recorder_ctrl is not None):
             return
         self._restore_after_work = self._restore_after_work or self.isVisible()
         self._capture_pending = True
@@ -2587,6 +2830,8 @@ class SnapShotController(QMainWindow):
         self.hotkey_manager.stop()
         if self.active_scroll_ctrl is not None:
             self.active_scroll_ctrl.cancel_capture()
+        if self.active_recorder_ctrl is not None:
+            self.active_recorder_ctrl.cancel_recording()
         if self.active_overlay is not None:
             self.active_overlay.close()
         for window in list(self.pinned_windows) + list(self._dialogs):

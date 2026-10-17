@@ -115,7 +115,7 @@ class InstallWorker(QThread):
                 except Exception:
                     pass
 
-            self.progress.emit(90, "Creating uninstaller...")
+            self.progress.emit(90, "Registering uninstaller with Windows Program Manager...")
             self._create_uninstaller(dest_exe)
 
             self.progress.emit(100, "Installation complete!")
@@ -151,6 +151,7 @@ timeout /t 1 >nul
 del /q "%USERPROFILE%\\Desktop\\SnapShot Pro.lnk" >nul 2>&1
 del /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\SnapShot Pro.lnk" >nul 2>&1
 reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "SnapShot Pro" /f >nul 2>&1
+reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\SnapShotPro" /f >nul 2>&1
 rd /s /q "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\SnapShot Pro" >nul 2>&1
 echo Removing application directory...
 cd /d "%TEMP%"
@@ -159,6 +160,35 @@ echo SnapShot Pro has been successfully removed.
 pause
 """
         uninst_bat.write_text(uninst_content, encoding="utf-8")
+
+        # Register in Windows "Programs and Features" / "Installed Apps" (Control Panel & Settings)
+        try:
+            import winreg
+            uninstall_key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\SnapShotPro"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, uninstall_key_path) as key:
+                winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "SnapShot Pro")
+                winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, "1.1.0")
+                winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, "Lyaritech")
+                ico_path = self.target_dir / "assets" / "icon.ico"
+                display_ico = str(ico_path) if ico_path.exists() else str(dest_exe)
+                winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, display_ico)
+                winreg.SetValueEx(key, "InstallLocation", 0, winreg.REG_SZ, str(self.target_dir))
+                winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'cmd.exe /c "{uninst_bat}"')
+                winreg.SetValueEx(key, "QuietUninstallString", 0, winreg.REG_SZ, f'cmd.exe /c "{uninst_bat}"')
+                winreg.SetValueEx(key, "NoModify", 0, winreg.REG_DWORD, 1)
+                winreg.SetValueEx(key, "NoRepair", 0, winreg.REG_DWORD, 1)
+        except Exception:
+            pass
+
+        # Also add uninstaller shortcut in Start Menu
+        if self.startmenu_sc:
+            appdata = os.environ.get("APPDATA")
+            if appdata:
+                start_dir = pathlib.Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "SnapShot Pro"
+                if start_dir.exists():
+                    lnk_uninst = start_dir / "Uninstall SnapShot Pro.lnk"
+                    ico_path = self.target_dir / "assets" / "icon.ico"
+                    self._create_shortcut(lnk_uninst, uninst_bat, ico_path)
 
 
 class InstallerWindow(QWidget):
@@ -308,6 +338,11 @@ class InstallerWindow(QWidget):
         row_btn.addWidget(self.btn_install)
 
         layout.addLayout(row_btn)
+
+        copyright_lbl = QLabel("© 2026 SnapShot Pro • Lyaritech. All rights reserved.")
+        copyright_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        copyright_lbl.setStyleSheet("font-size: 11px; color: #64748B; padding-top: 8px;")
+        layout.addWidget(copyright_lbl)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Select Install Directory", self.edit_dir.text())

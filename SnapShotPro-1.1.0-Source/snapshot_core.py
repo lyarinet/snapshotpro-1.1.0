@@ -149,6 +149,37 @@ def save_image(image: QImage | QPixmap, directory: str, fmt: str = "PNG",
     return target
 
 
+def save_gif(images: list[QImage | QPixmap], directory: str,
+             prefix: str = "SnapShot_Rec", fps: int = 10) -> pathlib.Path:
+    """Encode captured frames into an optimized animated GIF with loop."""
+    from PIL import Image
+    if not images:
+        raise ValueError("No frames recorded.")
+    target_dir = pathlib.Path(directory).expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filepath = target_dir / f"{prefix}_{timestamp}_{uuid.uuid4().hex[:4]}.gif"
+
+    pil_frames = []
+    for img in images:
+        if isinstance(img, QPixmap):
+            img = img.toImage()
+        pil_img = image_to_pil(img)
+        pil_frames.append(pil_img.quantize(colors=256, method=Image.Quantize.MEDIANCUT))
+
+    duration = max(20, int(1000 / fps))
+    pil_frames[0].save(
+        filepath,
+        save_all=True,
+        append_images=pil_frames[1:],
+        optimize=True,
+        duration=duration,
+        loop=0,
+    )
+    return filepath
+
+
+
 def find_tesseract() -> str | None:
     configured = os.environ.get("SNAPSHOT_TESSERACT")
     if configured and pathlib.Path(configured).is_file():

@@ -2,7 +2,7 @@
 
 Lightshot-style screenshot aur annotation desktop app. Native **PyQt6** UI; browser/Electron runtime nahi. Windows ko pehla target rakha gaya hai, Linux X11 aur macOS ke liye bhi source aur native build workflow diya gaya hai.
 
-![SnapShot Pro control panel](**assets/screenshot_preview.png**)
+![SnapShot Pro control panel](https://raw.githubusercontent.com/lyarinet/snapshotpro-1.1.0-source/refs/heads/main/SnapShotPro-1.1.0-Source/assets/screenshot_preview.png)
 
 ## Windows par foran shuru karein
 
